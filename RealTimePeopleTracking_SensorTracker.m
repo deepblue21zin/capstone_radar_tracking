@@ -42,19 +42,27 @@ catch ME
 end
 
 %% 3) 필터링 파라미터
-minSpeedThreshold = 0.2;   % m/s (속도 성분 있을 때만 적용)
+minSpeedThreshold = 0.05;  % m/s (낮춰서 느린 움직임도 감지)
 maxRange          = 12;    % m
 
-%% 3.5) MATLAB 트래커 초기화
-tracker = trackerJPDA('FilterInitializationFcn', @initcvekf, ...
-    'AssignmentThreshold', [200 inf], ...
-    'ConfirmationThreshold', [2 3], ...
-    'DeletionThreshold', [3 3], ...
+%% 3.5) MATLAB 트래커 초기화 - 트랙 분리 방지 최적화
+tracker = trackerJPDA('FilterInitializationFcn', @initCustomFilter, ...
+    'AssignmentThreshold', [30 inf], ...      % 200 → 30: 같은 객체를 더 잘 연결
+    'ConfirmationThreshold', [3 5], ...       % [2 3] → [3 5]: 새 트랙 생성 어렵게
+    'DeletionThreshold', [8 10], ...          % [3 3] → [8 10]: 트랙 유지 시간 증가
     'MaxNumTracks', 20, ...
     'OOSMHandling', 'Neglect');
 
 isTrackerInitialized = false;
-fprintf('✅ MATLAB 트래커 초기화 완료\n\n');
+fprintf('✅ MATLAB 트래커 초기화 완료 (트랙 분리 방지 모드)\n\n');
+
+% 커스텀 필터 초기화 함수 (프로세스 노이즈 조정)
+function filter = initCustomFilter(detection)
+    filter = initcvekf(detection);
+    % 프로세스 노이즈 감소 → 급격한 움직임 변화 억제 → 트랙 안정성 증가
+    filter.ProcessNoise = filter.ProcessNoise * 0.3;  % 30%로 감소
+    % 측정 노이즈는 유지 (레이더 정확도 반영)
+end
 
 %% 4) 시각화 설정
 stopTime = 90;
