@@ -1,18 +1,20 @@
-%% RealTimePeopleTracking_SensorTracker_Optimized.m - 최적화 버전
-% IWR6843 Detection + MATLAB Tracker + DBSCAN Clustering (Hybrid)
+%% RealTimePeopleTracking_SensorTracker_Optimized.m - 왕복운동 최적화 버전
+% IWR6843 Detection + MATLAB Tracker + DBSCAN Clustering (왕복운동 특화)
 %
 % 주요 개선 사항:
 % 1. ✅ DBSCAN 클러스터링 추가 (여러 point → 하나의 객체)
-% 2. ✅ 최적화된 Kalman Filter 튜닝 (균형잡힌 Process Noise)
-% 3. ✅ 적절한 트래커 파라미터 (과도하지 않은 임계값)
-% 4. ✅ 좌표 회전 기능 유지 (전방=Y+ 표시)
-% 5. ✅ 디버깅 로그 및 성능 모니터링
+% 2. ✅ 왕복운동 최적화 Kalman Filter (Process Noise ×3.0)
+% 3. ✅ 급격한 방향 전환 대응 (AssignmentThreshold: 200)
+% 4. ✅ Boundary Box 필터링 수정 (센서 좌표 기준 적용)
+% 5. ✅ 좌표 회전 기능 유지 (전방=Y+ 표시)
+% 6. ✅ 디버깅 로그 및 성능 모니터링
 %
-% 개선 전략:
-% - AssignmentThreshold: 100 (30과 1000의 중간, 적절한 연결)
-% - ProcessNoise: ×2.0 (0.3과 5.0의 중간, 왕복운동 대응)
+% 왕복운동 특화 전략:
+% - AssignmentThreshold: 200 (급격한 방향 전환 허용)
+% - ProcessNoise: ×3.0 (방향 전환 예측력 향상)
 % - ConfirmationThreshold: [2 3] (빠른 생성 + 안정성)
-% - DBSCAN epsilon: 0.6m (0.8m보다 타이트하게)
+% - DBSCAN epsilon: 0.9m (좌우 흔들림 허용)
+% - Boundary Box: 센서 좌표 기준 정확한 필터링
 clc; clear; close all;
 
 %% ========== 커스텀 함수 정의 (파일 최상단) ==========
@@ -120,9 +122,9 @@ function filter = initOptimizedFilter(detection)
     % 기본 CV EKF 생성
     filter = initcvekf(detection);
 
-    % Process Noise 중간값 - 왕복운동 대응 + 안정성 균형
-    % 0.3 (너무 안정) vs 5.0 (너무 불안정) → 2.0 (최적)
-    filter.ProcessNoise = filter.ProcessNoise * 2.0;
+    % Process Noise 증가 - 왕복운동 시 급격한 방향 전환 대응
+    % 2.0 → 3.0 (왕복운동 최적화)
+    filter.ProcessNoise = filter.ProcessNoise * 3.0;
 
     % Measurement Noise는 약간만 감소 (레이더 정확도 신뢰)
     filter.MeasurementNoise = filter.MeasurementNoise * 0.5;
@@ -137,9 +139,10 @@ if ~exist(cfgFile,'file')
 end
 
 fprintf('\n╔════════════════════════════════════════════╗\n');
-fprintf('║   최적화된 추적 시스템 v3.0 (Hybrid)     ║\n');
+fprintf('║   왕복운동 최적화 시스템 v3.1            ║\n');
 fprintf('║   + DBSCAN 클러스터링                    ║\n');
-fprintf('║   + 균형잡힌 트래커 파라미터             ║\n');
+fprintf('║   + 왕복운동 특화 트래커 파라미터        ║\n');
+fprintf('║   + Boundary Box 필터링 수정             ║\n');
 fprintf('║   + 좌표 회전 (전방=Y+)                  ║\n');
 fprintf('╚════════════════════════════════════════════╝\n\n');
 fprintf('ℹ️  CFG 파일 로드 중...\n\n');
@@ -173,25 +176,31 @@ end
 minSpeedThreshold = 0.05;   % m/s (느린 움직임도 감지)
 maxRange          = 12;     % m
 
-% DBSCAN 파라미터
-dbscanEpsilon = 0.6;  % 0.8m → 0.6m (더 타이트한 클러스터링)
+% DBSCAN 파라미터 (왕복운동 대응)
+dbscanEpsilon = 0.9;  % 0.6m → 0.9m (왕복 시 좌우 흔들림 허용)
 dbscanMinPts  = 1;    % 최소 포인트 수
 
-%% 3.5) MATLAB 트래커 초기화 - 최적화된 파라미터
+% Boundary Box (센서 좌표 기준!) - IWR6843는 일반적으로 X+가 전방
+% 센서 설치 방향에 따라 조정 필요
+xMin_bb_sensor =  0.5; xMax_bb_sensor = 8;    % 전방: X+ 방향
+yMin_bb_sensor = -2;   yMax_bb_sensor = 2;    % 좌우: Y 방향
+zMin_bb_sensor =  0;   zMax_bb_sensor = 2.5;  % 높이: Z 방향
+
+%% 3.5) MATLAB 트래커 초기화 - 왕복운동 최적화 파라미터
 tracker = trackerJPDA('FilterInitializationFcn', @initOptimizedFilter, ...
-    'AssignmentThreshold', [100 inf], ...       % 30 vs 1000 → 100 (균형)
-    'ConfirmationThreshold', [2 3], ...         % [3 5] vs [2 2] → [2 3] (빠른 생성 + 안정성)
+    'AssignmentThreshold', [200 inf], ...       % 100 → 200 (왕복운동 시 급격한 방향 전환 허용)
+    'ConfirmationThreshold', [2 3], ...         % [2 3] 유지 (빠른 생성 + 안정성)
     'DeletionThreshold', [8 10], ...            % 트랙 유지 (동일)
     'MaxNumTracks', 20, ...
     'OOSMHandling', 'Neglect');
 
 isTrackerInitialized = false;
-fprintf('✅ MATLAB 트래커 초기화 완료 (최적화 파라미터)\n');
-fprintf('   - AssignmentThreshold: 100 (균형)\n');
+fprintf('✅ MATLAB 트래커 초기화 완료 (왕복운동 최적화)\n');
+fprintf('   - AssignmentThreshold: 200 (왕복운동 대응)\n');
 fprintf('   - ConfirmationThreshold: [2 3] (빠른 생성 + 안정)\n');
 fprintf('   - DeletionThreshold: [8 10] (긴 유지)\n');
-fprintf('   - Process Noise: ×2.0 (왕복운동 대응)\n');
-fprintf('   - DBSCAN epsilon: %.2fm\n\n', dbscanEpsilon);
+fprintf('   - Process Noise: ×3.0 (급격한 방향 전환 대응)\n');
+fprintf('   - DBSCAN epsilon: %.2fm (좌우 흔들림 허용)\n\n', dbscanEpsilon);
 
 %% 4) 시각화 설정
 stopTime = 90;
@@ -240,25 +249,26 @@ for r = [3, 6, 9]
     plot(ax, r*sin(theta), r*cos(theta), ':', 'Color', [0.3 0.3 0.4], 'LineWidth', 1);
 end
 
-% Boundary Box (3D) - 표시좌표계 기준(Y 전방)
-xMin_bb = -2; xMax_bb =  2;
-yMin_bb =  0.5; yMax_bb = 8;
-zMin_bb =  0;  zMax_bb = 2.5;
+% Boundary Box 시각화 (표시좌표계 기준, Y 전방)
+% 센서 좌표를 회전하여 표시
+xMin_bb_disp = -2; xMax_bb_disp =  2;
+yMin_bb_disp =  0.5; yMax_bb_disp = 8;
+zMin_bb_disp =  0;  zMax_bb_disp = 2.5;
 
-boxVertices = [
-    xMin_bb, yMin_bb, zMin_bb;
-    xMax_bb, yMin_bb, zMin_bb;
-    xMax_bb, yMax_bb, zMin_bb;
-    xMin_bb, yMax_bb, zMin_bb;
-    xMin_bb, yMin_bb, zMax_bb;
-    xMax_bb, yMin_bb, zMax_bb;
-    xMax_bb, yMax_bb, zMax_bb;
-    xMin_bb, yMax_bb, zMax_bb
+boxVertices_disp = [
+    xMin_bb_disp, yMin_bb_disp, zMin_bb_disp;
+    xMax_bb_disp, yMin_bb_disp, zMin_bb_disp;
+    xMax_bb_disp, yMax_bb_disp, zMin_bb_disp;
+    xMin_bb_disp, yMax_bb_disp, zMin_bb_disp;
+    xMin_bb_disp, yMin_bb_disp, zMax_bb_disp;
+    xMax_bb_disp, yMin_bb_disp, zMax_bb_disp;
+    xMax_bb_disp, yMax_bb_disp, zMax_bb_disp;
+    xMin_bb_disp, yMax_bb_disp, zMax_bb_disp
 ];
 boxFaces = [
     1 2 3 4; 5 6 7 8; 1 2 6 5; 2 3 7 6; 3 4 8 7; 4 1 5 8
 ];
-patch(ax, 'Vertices', boxVertices, 'Faces', boxFaces, ...
+patch(ax, 'Vertices', boxVertices_disp, 'Faces', boxFaces, ...
       'FaceColor', [0.5 0 0.5], 'FaceAlpha', 0.05, ...
       'EdgeColor', [0.5 0 0.5], 'LineWidth', 1.5, ...
       'DisplayName', 'Tracking Boundary');
@@ -341,11 +351,16 @@ while toc(loopStartTime) < stopTime
         isDynamic = vel_magnitudes > minSpeedThreshold;
     end
 
-    % 거리/높이 필터 (센서좌표 기준 거리)
+    % 거리 필터 (센서좌표 기준)
     ranges = sqrt(x_all.^2 + y_all.^2 + z_all.^2);
     isDynamic = isDynamic & (ranges <= maxRange);
-    isValidHeight = (z_all >= zMin_bb) & (z_all <= zMax_bb);
-    isDynamic = isDynamic & isValidHeight;
+
+    % ===== 🔧 Boundary Box 필터링 (센서 좌표 기준) =====
+    % 센서가 X+를 전방으로 사용한다고 가정
+    isInBoundary = (x_all >= xMin_bb_sensor) & (x_all <= xMax_bb_sensor) & ...
+                   (y_all >= yMin_bb_sensor) & (y_all <= yMax_bb_sensor) & ...
+                   (z_all >= zMin_bb_sensor) & (z_all <= zMax_bb_sensor);
+    isDynamic = isDynamic & isInBoundary;
 
     dynamicDetections = detections(isDynamic);
 
@@ -602,10 +617,11 @@ catch
 end
 clear rdr;
 
-fprintf('\n💡 최적화 버전 적용 완료:\n');
+fprintf('\n💡 왕복운동 최적화 버전 적용 완료:\n');
 fprintf('   ✅ DBSCAN 클러스터링 (epsilon=%.2fm, SNR 가중)\n', dbscanEpsilon);
-fprintf('   ✅ Kalman Filter 균형 튜닝 (Process Noise ×2.0)\n');
-fprintf('   ✅ Assignment Threshold: 100 (적절한 연결)\n');
+fprintf('   ✅ Kalman Filter 왕복운동 튜닝 (Process Noise ×3.0)\n');
+fprintf('   ✅ Assignment Threshold: 200 (급격한 방향 전환 허용)\n');
 fprintf('   ✅ Confirmation Threshold: [2 3] (빠른 생성 + 안정)\n');
+fprintf('   ✅ Boundary Box 필터링 (센서 좌표 기준)\n');
 fprintf('   ✅ 좌표 회전 (전방=Y+ 표시)\n');
 fprintf('   ✅ 성능 모니터링 및 통계\n\n');
